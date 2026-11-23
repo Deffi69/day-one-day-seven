@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Kancil Dash — game kecil buatan agen AI</title>
+<style>
+  html,body{margin:0;padding:0;background:#0f172a;height:100%;overflow:hidden;
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  #wrap{position:relative;width:min(100vw,56.25vh);height:100vh;margin:0 auto;background:#bfe3f0}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  #hud{position:absolute;top:10px;left:0;right:0;display:flex;justify-content:space-between;
+    padding:0 14px;pointer-events:none;color:#123;font-weight:800}
+  #hud span{background:rgba(255,255,255,.75);border-radius:999px;padding:6px 14px;font-size:15px}
+  #msg{position:absolute;left:0;right:0;top:38%;text-align:center;color:#123;
+    font-weight:800;pointer-events:none;text-shadow:0 2px 0 rgba(255,255,255,.6)}
+  #msg small{display:block;font-weight:600;font-size:14px;margin-top:6px}
+  #toggle{position:absolute;bottom:12px;left:0;right:0;text-align:center}
+  #toggle button{border:0;border-radius:999px;padding:10px 18px;font-weight:800;
+    font-size:15px;background:#c41c83;color:#fff;box-shadow:0 4px 0 #8f0f5e}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="540" height="960"></canvas>
+  <div id="hud"><span id="day">DAY 1</span><span id="score">SKOR 0</span></div>
+  <div id="msg">KANCIL DASH<small>Ketuk / Spasi untuk lompat</small></div>
+  <div id="toggle"><button id="dayBtn">Lihat Day 7 &raquo;</button></div>
+</div>
+<script>
+"use strict";
+/* Kancil Dash — tiny endless runner built by an AI agent.
+   Day 1 vs Day 7: the SAME map (same log spacing, same start), but Day 7
+   has a week of daily updates: coins, birds, hills, flowers, particles.
+   ?day=1 or ?day=7 picks the build. Default: Day 7. */
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const W = 540, H = 960, GROUND = 725, KX = 135;
+const params = new URLSearchParams(location.search);
+let day = params.get('day') === '1' ? 1 : 7;
+
+const state = { t: 0, speed: 4, y: 0, vy: 0, jumping: false, score: 0,
+  coins: 0, over: false, started: false, dist: 0, best: +(localStorage.getItem('kancil-best') || 0) };
+const LOG_GAP = 325, LOG_W = 46, LOG_H = 64;
+const logs = [];   // world x of each log; same pattern in both builds
+for (let i = 0; i < 40; i++) logs.push(500 + i * LOG_GAP);
+const coins = [];  // day-7 only: arcs of 3 between logs
+for (let i = 0; i < 40; i++) for (let k = 0; k < 3; k++)
+  coins.push({ x: 500 + i * LOG_GAP + 90 + k * 42, y: GROUND - 150 - Math.sin(k * Math.PI / 2) * 40, got: false });
+
+function jump() {
+  if (state.over) { reset(); return; }
+  if (!state.started) { state.started = true; document.getElementById('msg').style.display = 'none'; }
+  if (!state.jumping) { state.jumping = true; state.vy = -13.5; }
+}
+function reset() {
+  Object.assign(state, { t: 0, y: 0, vy: 0, jumping: false, score: 0, coins: 0,
+    over: false, started: false, dist: 0 });
+  coins.forEach(c => c.got = false);
+  document.getElementById('msg').style.display = 'block';
+  document.getElementById('msg').innerHTML = 'KANCIL DASH<small>Ketuk / Spasi untuk lompat</small>';
+}
+function kancilY() { return GROUND - 52 - state.y; }
+
+function drawKancil(x, y, run) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = '#8b5a2b';
+  ctx.beginPath(); ctx.ellipse(0, 0, 34, 22, 0, 0, Math.PI * 2); ctx.fill();       // body
+  ctx.beginPath(); ctx.arc(30, -20, 15, 0, Math.PI * 2); ctx.fill();              // head
+  ctx.beginPath(); ctx.moveTo(22, -32); ctx.lineTo(26, -46); ctx.lineTo(32, -32); ctx.fill(); // ear
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(35, -24, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#123'; ctx.beginPath(); ctx.arc(36, -24, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#8b5a2b';
+  const a = state.jumping ? 0.5 : Math.sin(run * 0.55) * 0.7;                       // legs
+  ctx.fillRect(-22, 14, 7, 20 + a * 8); ctx.fillRect(-6, 14, 7, 20 - a * 8);
+  ctx.fillRect(8, 14, 7, 20 + a * 8); ctx.fillRect(20, 14, 7, 20 - a * 8);
+  ctx.beginPath(); ctx.moveTo(-32, -6); ctx.lineTo(-46, -16); ctx.lineTo(-42, -2); ctx.fill(); // tail
+  ctx.restore();
+}
+function drawScene() {
+  // sky
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  if (day === 1) { sky.addColorStop(0, '#bfe3f0'); sky.addColorStop(1, '#e8f6fa'); }
+  else { sky.addColorStop(0, '#ffd9a0'); sky.addColorStop(.55, '#ffeecf'); sky.addColorStop(1, '#fff6e0'); }
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  if (day === 7) {
+    ctx.fillStyle = '#ffcf4d'; ctx.beginPath(); ctx.arc(430, 110, 42, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    for (let i = 0; i < 3; i++) { const cx = ((i * 260 - state.dist * 0.15) % 700 + 700) % 700 - 80;
+      ctx.beginPath(); ctx.ellipse(cx, 90 + i * 55, 46, 18, 0, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#7cb85c';
+    for (let i = 0; i < 4; i++) { const hx = ((i * 300 - state.dist * 0.35) % 800 + 800) % 800 - 130;
+      ctx.beginPath(); ctx.arc(hx, GROUND, 150, Math.PI, 0); ctx.fill(); }
+    ctx.strokeStyle = '#123'; ctx.lineWidth = 2;                                    // birds
+    for (let i = 0; i < 2; i++) { const bx = ((i * 420 + state.t * 2.2) % 700) - 80, by = 150 + i * 60 + Math.sin(state.t * 0.09 + i) * 10;
+      ctx.beginPath(); ctx.moveTo(bx - 12, by); ctx.quadraticCurveTo(bx, by - 9, bx + 12, by); ctx.stroke(); }
+  }
+  // ground
+  ctx.fillStyle = day === 1 ? '#7cb85c' : '#5da244';
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = day === 1 ? '#6aa84f' : '#4c8a38';
+  ctx.fillRect(0, GROUND, W, 8);
+  if (day === 7) {                                                                    // flowers + grass
+    ctx.fillStyle = '#ff8fb3';
+    for (let i = 0; i < 14; i++) { const fx = ((i * 97 - state.dist) % 620 + 620) % 620 - 40;
+      ctx.beginPath(); ctx.arc(fx, GROUND + 34 + (i % 3) * 46, 5, 0, Math.PI * 2); ctx.fill(); }
+  }
+  // logs (same map both days)
+  for (const lx0 of logs) { const lx = lx0 - state.dist; if (lx < -80 || lx > W + 80) continue;
+    ctx.fillStyle = '#6b4423'; ctx.fillRect(lx, GROUND - LOG_H, LOG_W, LOG_H);
+    ctx.fillStyle = '#8b5a2b'; ctx.fillRect(lx - 4, GROUND - LOG_H - 8, LOG_W + 8, 12); }
+  // coins (day 7)
+  if (day === 7) for (const c of coins) { if (c.got) continue; const cx = c.x - state.dist;
+    if (cx < -20 || cx > W + 20) continue;
+    ctx.fillStyle = '#ffcf4d'; ctx.beginPath(); ctx.arc(cx, c.y, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#c9930a'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center'; ctx.fillText('$', cx, c.y + 5); }
+  drawKancil(KX, kancilY(), state.t);
+  document.getElementById('day').textContent = 'DAY ' + day;
+  document.getElementById('score').textContent = 'SKOR ' + state.score + (day === 7 ? '  ·  $' + state.coins : '');
+}
+function step() {
+  state.t++;
+  if (state.started && !state.over) {
+    state.dist += state.speed;
+    state.score = Math.floor(state.dist / 50);
+    if (state.jumping) { state.y += -state.vy; state.vy += 0.9; if (state.y <= 0) { state.y = 0; state.jumping = false; } }
+    for (const lx0 of logs) { const lx = lx0 - state.dist;
+      if (lx + LOG_W > KX - 26 && lx < KX + 26 && state.y < LOG_H) {
+        if (lx + LOG_W > KX - 10 && lx < KX + 10) { state.over = true;
+          state.best = Math.max(state.best, state.score);
+          localStorage.setItem('kancil-best', state.best);
+          document.getElementById('msg').style.display = 'block';
+          document.getElementById('msg').innerHTML = 'GAME OVER — SKOR ' + state.score +
+            '<small>Terbaik: ' + state.best + ' · Ketuk untuk main lagi</small>'; } } }
+    if (day === 7) for (const c of coins) { const cx = c.x - state.dist;
+      if (!c.got && Math.abs(cx - KX) < 34 && Math.abs(c.y - kancilY()) < 55) { c.got = true; state.coins += 10; } }
+  }
+  drawScene();
+  requestAnimationFrame(step);
+}
+function setDay(d) { day = d; document.getElementById('dayBtn').textContent = d === 1 ? 'Lihat Day 7 »' : 'Lihat Day 1 »'; }
+document.getElementById('dayBtn').onclick = () => setDay(day === 1 ? 7 : 1);
+cv.addEventListener('pointerdown', jump);
+addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); jump(); } });
+setDay(day);
+requestAnimationFrame(step);
+</script>
+</body>
+</html>
